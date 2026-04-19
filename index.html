@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Tracking xAPI</title>
+  <script src="https://cdn.jsdelivr.net/gh/adlnet/xAPIWrapper@master/dist/xapiwrapper.min.js"></script>
+</head>
+<body>
+  <video id="myVideo" width="640" height="360" controls>
+    <source src="video/cliente.mp4" type="video/mp4">
+    Your browser does not support the video tag.
+  </video>
+
+  <script>
+    // ===== Helpers xAPI =====
+    function getQueryVariable(name) {
+      var query = window.location.search.substring(1);
+      var vars = query.split("&");
+      for (var i = 0; i < vars.length; i++) {
+        var pair = vars[i].split("=");
+        if (pair[0] === name) return decodeURIComponent(pair[1]);
+      }
+      return null;
+    }
+
+    function getSafeActor() {
+      var actorParam = getQueryVariable("actor");
+      if (!actorParam) return null;
+      try {
+        var actor = JSON.parse(actorParam);
+        // Normalizar formato inválido que envía SCORM Cloud
+        if (Array.isArray(actor.name)) actor.name = actor.name[0];
+        if (Array.isArray(actor.account)) actor.account = actor.account[0];
+
+        // Corregir claves incorrectas del account
+        if (actor.account) {
+          if (actor.account.accountServiceHomePage) {
+            actor.account.homePage = actor.account.accountServiceHomePage;
+            delete actor.account.accountServiceHomePage;
+          }
+          if (actor.account.accountName) {
+            actor.account.name = actor.account.accountName;
+            delete actor.account.accountName;
+          }
+        }
+
+        // Fallback si sigue inválido
+        if (!actor.mbox && !actor.account) {
+          actor.mbox = "mailto:default@example.com";
+        }
+        return actor;
+      } catch (e) {
+        console.error("Actor inválido", actorParam);
+        return null;
+      }
+    }
+    // ===== Configuración xAPI =====
+    // CAMBIO: eliminar configuración manual. SCORM Cloud ya inyecta el LRS en el wrapper.
+    // NO llamar a changeConfig aquí.
+
+    // Función para enviar un statement al LRS
+    function enviarStatement(verb, description, extraResult) {
+      var safeActor = getSafeActor();
+
+      var statement = {
+        "actor": safeActor,
+        "verb": {
+          "id": verb,
+          "display": { "en-US": description }
+        },
+        "object": {
+          // Usar el activity_id del launch de SCORM Cloud
+          "id": getQueryVariable("activity_id") || "http://example.com/xapi/video",
+          "definition": {
+            "name": { "en-US": "Video de Cliente" },
+            "description": { "en-US": "Un video del cliente que se está observando." }
+          },
+          "objectType": "Activity"
+        }
+      };
+
+      // Añadir result si viene (necesario para completion en SCORM Cloud)
+      if (extraResult) {
+        statement.result = extraResult;
+      }
+
+      // Enviar el statement al LRS
+      // Control básico de errores
+      ADL.XAPIWrapper.sendStatement(statement, function(resp, obj) {
+        if (resp && resp.status >= 200 && resp.status < 300) {
+          console.log("Statement OK");
+        } else {
+          console.error("Error enviando statement", resp);
+        }
+      });
+    }
+
+    // Obtener el elemento del video
+    var video = document.getElementById("myVideo");
+
+    // Event listener cuando el video empieza a reproducirse
+    video.addEventListener("play", function() {
+      enviarStatement("http://adlnet.gov/expapi/verbs/played", "Video comenzado");
+    });
+
+    // Event listener cuando el video se pausa
+    // CAMBIO: evitar enviar "pause" cuando el video termina
+    video.addEventListener("pause", function() {
+      if (!video.ended) {
+        enviarStatement("http://adlnet.gov/expapi/verbs/paused", "Video pausado");
+      }
+    });
+
+    // Event listener cuando el video se termina
+    video.addEventListener("ended", function() {
+      enviarStatement(
+        "http://adlnet.gov/expapi/verbs/completed",
+        "Video completado",
+        {
+          completion: true,
+          success: true
+        }
+      );
+    });
+  </script>
+</body>
+</html>
